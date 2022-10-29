@@ -140,6 +140,7 @@ export async function readItems(
     throw new Error(`Item list header 'JM' not found at position ${reader.offset - 2 * 8}`);
   }
   const count = reader.ReadUInt16(); //0x0002
+
   for (let i = 0; i < count; i++) {
     items.push(await readItem(reader, version, constants, config));
   }
@@ -164,7 +165,7 @@ export async function writeItems(
 export async function readItem(
   reader: BitReader,
   version: number,
-  constants: types.IConstantData,
+  originalConstants: types.IConstantData,
   config: types.IConfig,
   parent?: types.IItem
 ): Promise<types.IItem> {
@@ -174,6 +175,7 @@ export async function readItem(
       throw new Error(`Item header 'JM' not found at position ${reader.offset - 2 * 8}`);
     }
   }
+  const constants = _correctConstantsForVersion(version || 0x60, originalConstants);
   const item = {} as types.IItem;
   _readSimpleBits(item, reader, version, constants, config);
   if (!item.simple_item) {
@@ -248,7 +250,7 @@ export async function readItem(
     if (item.personalized) {
       const arr = new Uint8Array(16);
       for (let i = 0; i < arr.length; i++) {
-        if (version == 0x62) {
+        if (version > 0x61) {
           arr[i] = reader.ReadUInt8(8);
         } else {
           arr[i] = reader.ReadUInt8(7);
@@ -413,13 +415,13 @@ export async function writeItem(
     if (item.personalized) {
       const name = item.personalized_name.substring(0, 16);
       for (let i = 0; i < name.length; i++) {
-        if (version == 0x62) {
+        if (version > 0x61) {
           writer.WriteUInt8(name.charCodeAt(i), 8);
         } else {
           writer.WriteUInt8(name.charCodeAt(i) & 0x7f, 7);
         }
       }
-      writer.WriteUInt8(0x00, version == 0x62 ? 8 : 7);
+      writer.WriteUInt8(0x00, version > 0x61 ? 8 : 7);
     }
 
     if (item.type === "tbk") {
@@ -762,4 +764,38 @@ function _GetItemTXT(item: types.IItem, constants: types.IConstantData): any {
   } else if (constants.other_items[item.type]) {
     return constants.other_items[item.type];
   }
+}
+
+const _versionConstantsCache: {[versionNumber: number]: types.IConstantData} = {};
+function _correctConstantsForVersion(version: number, constants: types.IConstantData): types.IConstantData {
+  if (_versionConstantsCache[version]) {
+    return _versionConstantsCache[version];
+  }
+  const versionConstants = { ...constants };
+
+  switch (version) {
+    case 0x63: // Patch 2.5
+      versionConstants.magical_properties = versionConstants.magical_properties.map((property, idx) => {
+        switch (property.s) {
+          case "damageresist":
+          case "magicresist":
+          case "fireresist":
+          case "lightresist":
+          case "coldresist":
+          case "poisonresist":
+            return {
+              ...versionConstants.magical_properties[idx],
+              sB: 9,
+              sA: 200,
+            };
+          default:
+            return {
+              ...versionConstants.magical_properties[idx],
+            };
+        }
+      });
+  }
+
+  _versionConstantsCache[version] = versionConstants;
+  return versionConstants;
 }
